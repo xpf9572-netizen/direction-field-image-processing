@@ -464,123 +464,97 @@ def ced_denoise(image, sigma_grad=1.0, rho=8.0,
 
 
 # ================================================================
-# 主程序
+# 主程序：批量处理 1Den 文件夹
 # ================================================================
 if __name__ == "__main__":
+    import os
+    import glob
+    from matplotlib.image import imread
+
     np.random.seed(42)
 
-    # ==================== 配置 ====================
-    USE_REAL_IMAGE = True
-    IMAGE_PATH = r"E:\E题（本科组）：基于方向场估计的图像处理模型及其应用\image1_example.png"
+    # ==================== 路径配置 ====================
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    INPUT_DIR = os.path.join(BASE_DIR, "数据（待处理数据）", "1Den")
+    OUTPUT_DIR = os.path.join(BASE_DIR, "results")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # --- 核心参数（便于网格调参）---
-    sigma_grad = 1.0       # 梯度预平滑尺度 σ
-    rho = 8.0              # 结构张量积分尺度 ρ（散斑路径≥8，高斯路径≤2）
-    num_iter = 100         # 迭代次数
-    dt = 0.2               # 时间步长
-    alpha = 0.01           # Weickert 背景扩散率
-    C = 1e-6               # Weickert 相干性灵敏度
-
-    # --- 自适应感知参数 ---
-    use_homomorphic = None  # None=自动感知，True/False=强制
-    median_window = 3       # 中值滤波窗口
-    force_noise_type = None  # None=自动，'speckle'/'gaussian'=强制
-    noise_threshold = 0.3   # 感知器相关系数阈值
-    block_size = 32         # 感知器图块大小
-
-    # --- v5 新增参数 ---
-    pre_smooth_sigma = 1.5  # 预平滑 sigma（方向场估计用）
-    use_lee_prefilter = True  # 散斑路径 Lee 预滤波
-    fringe_mean_prior = 0.5  # 条纹图干净均值先验
+    # ==================== 参数配置 ====================
+    sigma_grad = 1.0
+    rho = 8.0
+    num_iter = 100
+    dt = 0.2
+    alpha = 0.01
+    C = 1e-6
+    use_homomorphic = None
+    median_window = 3
+    force_noise_type = None
+    noise_threshold = 0.3
+    block_size = 32
+    pre_smooth_sigma = 1.5
+    use_lee_prefilter = True
+    fringe_mean_prior = 0.5
     # =================================================
 
-    if USE_REAL_IMAGE:
-        from matplotlib.image import imread
+    # 收集输入文件（01.png ~ 10.png）
+    input_files = sorted(glob.glob(os.path.join(INPUT_DIR, "*.png")))
+    if not input_files:
+        print(f"错误：在 {INPUT_DIR} 中未找到图片")
+        exit(1)
 
-        img = imread(IMAGE_PATH)
+    print("=" * 60)
+    print("CED v5 — 批量去噪")
+    print("=" * 60)
+    print(f"输入目录: {INPUT_DIR}")
+    print(f"输出目录: {OUTPUT_DIR}")
+    print(f"待处理: {len(input_files)} 张图片")
+    print(f"参数: σ={sigma_grad}, ρ={rho}, iter={num_iter}, α={alpha}, C={C}")
+    print(f"PDE 求解器: {'Numba JIT' if HAS_NUMBA else 'NumPy'}")
+    print()
+
+    total_start = time.time()
+
+    for idx, input_path in enumerate(input_files, 1):
+        basename = os.path.splitext(os.path.basename(input_path))[0]
+        output_name = f"1Den_{basename}.png"
+        output_path = os.path.join(OUTPUT_DIR, output_name)
+
+        # 读取并归一化
+        img = imread(input_path)
         if img.ndim == 3:
             img = np.mean(img, axis=2)
         img = img.astype(np.float64)
         img = (img - img.min()) / (img.max() - img.min() + 1e-10)
 
-        noisy_fringe = img
-        original = img.copy()
-        has_ground_truth = False
-        print("=" * 60)
-        print("相干增强扩散 (CED) v5 — 散斑优化版")
-        print("=" * 60)
-        print(f"加载图片: {IMAGE_PATH}")
-        print(f"图像尺寸: {img.shape[1]}x{img.shape[0]}")
-        print(f"PDE 求解器: {'Numba JIT' if HAS_NUMBA else 'NumPy'}")
-        print(f"参数: σ={sigma_grad}, ρ={rho}, iter={num_iter}, α={alpha}, C={C}")
-    else:
-        N = 256
-        x = np.linspace(-1, 1, N)
-        y = np.linspace(-1, 1, N)
-        X, Y = np.meshgrid(x, y)
-        phase = 20 * (X**2 + Y**2) + 5 * X * Y + 3 * np.sin(2 * np.pi * X)
-        fringe = 0.5 * (1 + np.cos(phase))
-        gaussian_noise = np.random.normal(0, 0.08, fringe.shape)
-        speckle_noise = fringe * np.random.exponential(0.15, fringe.shape)
-        noisy_fringe = np.clip(fringe + gaussian_noise + speckle_noise, 0, 1)
-        original = fringe.copy()
-        has_ground_truth = True
+        print(f"[{idx}/{len(input_files)}] {os.path.basename(input_path)} → {output_name}")
 
-        print("=" * 60)
-        print("相干增强扩散 (CED) v4 — 自适应感知双态演化")
-        print("=" * 60)
-        print(f"图像尺寸: {N}x{N}")
-        print(f"噪声类型: 高斯噪声(σ=0.08) + 散斑噪声(乘性)")
+        # CED 去噪
+        denoised = ced_denoise(
+            img,
+            sigma_grad=sigma_grad,
+            rho=rho,
+            num_iter=num_iter,
+            dt=dt,
+            alpha=alpha,
+            C=C,
+            use_homomorphic=use_homomorphic,
+            median_window=median_window,
+            force_noise_type=force_noise_type,
+            noise_threshold=noise_threshold,
+            block_size=block_size,
+            pre_smooth_sigma=pre_smooth_sigma,
+            use_lee_prefilter=use_lee_prefilter,
+            fringe_mean_prior=fringe_mean_prior,
+        )
+        denoised = np.clip(denoised, 0, 1)
 
-    print()
+        # 保存为 uint8 灰度 PNG
+        plt.imsave(output_path, denoised, cmap='gray')
+        print(f"  已保存: {output_path}")
+        print()
 
-    # --- 运行 CED 去噪 ---
-    print("开始 CED 去噪...")
-    denoised = ced_denoise(
-        noisy_fringe,
-        sigma_grad=sigma_grad,
-        rho=rho,
-        num_iter=num_iter,
-        dt=dt,
-        alpha=alpha,
-        C=C,
-        use_homomorphic=use_homomorphic,
-        median_window=median_window,
-        force_noise_type=force_noise_type,
-        noise_threshold=noise_threshold,
-        block_size=block_size,
-        pre_smooth_sigma=pre_smooth_sigma,
-        use_lee_prefilter=use_lee_prefilter,
-        fringe_mean_prior=fringe_mean_prior
-    )
-
-    denoised = np.clip(denoised, 0, 1)
-
-    if has_ground_truth:
-        psnr_after = 10 * np.log10(1.0 / np.mean((original - denoised) ** 2))
-        psnr_before = 10 * np.log10(1.0 / np.mean((original - noisy_fringe) ** 2))
-        mae_after = np.mean(np.abs(original - denoised))
-        mae_before = np.mean(np.abs(original - noisy_fringe))
-        print(f"\n{'='*60}")
-        print(f"评估结果:")
-        print(f"  MAE: {mae_before:.4f} -> {mae_after:.4f} (降低 {((mae_before-mae_after)/mae_before)*100:.1f}%)")
-        print(f"  PSNR: {psnr_before:.2f} dB -> {psnr_after:.2f} dB (提升 {psnr_after-psnr_before:.2f} dB)")
-        print(f"{'='*60}")
-    else:
-        print(f"\n去噪完成 | 输出范围: [{denoised.min():.4f}, {denoised.max():.4f}]")
-
-    # --- 保存结果 ---
-    output_path = IMAGE_PATH.rsplit('.', 1)[0] + '_ced.png'
-    plt.imsave(output_path, denoised, cmap='gray')
-    print(f"已保存去噪结果: {output_path}")
-
-    # --- 可视化 ---
-    import matplotlib
-    matplotlib.use('TkAgg')
-    import matplotlib.pyplot as plt
-
-    plt.imshow(denoised, cmap='gray')
-    plt.title('CED v4 Adaptive Denoised')
-    plt.axis('off')
-    plt.colorbar(fraction=0.046)
-    plt.show(block=True)
+    total_time = time.time() - total_start
+    print("=" * 60)
+    print(f"全部完成 | 共 {len(input_files)} 张 | 总用时: {total_time:.1f}s")
+    print(f"输出目录: {OUTPUT_DIR}")
+    print("=" * 60)

@@ -65,7 +65,7 @@ def evaluate_batch(denoised_dir, ideal_dir, num_images=10):
 # ================= 运行测试 =================
 if __name__ == "__main__":
     # 单张图测试：结果图 vs 原图（使用相对路径避免编码问题）
-    result_path = "image1_example_ced.png"
+    result_path = "image2_example_ced.png"
     ideal_path = "label_example.png"
     
     test_denoised = cv2.imread(result_path, cv2.IMREAD_GRAYSCALE)
